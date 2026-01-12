@@ -1,0 +1,437 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Peripheral Color Sensitivity Test</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: flex-start; 
+            min-height: 100vh;
+            margin: 0;
+            background-color: #1a1a1a;
+            color: #e0e0e0;
+            overflow-x: hidden;
+        }
+
+        #orientationOverlay {
+            display: none;
+            position: fixed;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: #1a1a1a;
+            z-index: 9999;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+            padding: 20px;
+        }
+
+        @media (orientation: portrait) and (max-width: 900px) {
+            #orientationOverlay { display: flex; }
+            #mainContent { display: none; }
+        }
+
+        #gameContainer {
+            position: relative;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            border-radius: 12px;
+            background-color: #2c2c2c;
+            padding: 20px;
+            box-shadow: 0 8px 16px rgba(0,0,0,0.3);
+            margin-top: 20px;
+            margin-bottom: 20px;
+            width: 95%;
+            max-width: 900px; 
+        }
+
+        canvas {
+            background-color: #000000;
+            border-radius: 8px;
+            cursor: crosshair;
+            display: block;
+            margin-top: 5px;
+        }
+
+        #centerSurveyBtn {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            z-index: 100;
+            background-color: #28a745;
+            color: white;
+            padding: 15px 30px;
+            font-size: 1.2em;
+            font-weight: bold;
+            border-radius: 50px;
+            box-shadow: 0 0 20px rgba(40, 167, 69, 0.5);
+            text-decoration: none;
+            display: none;
+            transition: transform 0.2s;
+        }
+        #centerSurveyBtn:hover {
+            transform: translate(-50%, -50%) scale(1.05);
+            background-color: #218838;
+        }
+
+        button {
+            background-color: #007bff;
+            color: white;
+            border: none;
+            padding: 12px 24px; 
+            font-size: 1em;
+            font-weight: 600;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        button:hover { background-color: #0056b3; transform: translateY(-1px); }
+        button:disabled { background-color: #555; cursor: not-allowed; }
+        .hidden { display: none; }
+        
+        :fullscreen #gameContainer { width: 100vw; height: 100vh; max-width: none; margin: 0; border-radius: 0; justify-content: center; }
+    </style>
+</head>
+<body>
+
+    <div id="orientationOverlay">
+        <svg xmlns="http://www.w3.org/2000/svg" class="w-20 h-20 mb-4 text-blue-500 animate-pulse" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 18h.01M7 21h10a2 2 0 002-2V5a2 2 0 00-2-2H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5l2-2m0 0l2 2m-2-2v14" />
+        </svg>
+        <h2 class="text-2xl font-bold mb-2">Please Rotate Your Device</h2>
+        <p class="text-gray-400">Landscape mode is required for peripheral testing.</p>
+    </div>
+
+    <div id="mainContent" class="w-full flex flex-col items-center">
+        <div id="gameContainer">
+            <canvas id="gameCanvas"></canvas>
+            
+            <a id="centerSurveyBtn" href="https://docs.google.com/forms/d/e/1FAIpQLSdO1cjX58BqaZxQ4pormZ_OJsi0gaPC3zjQjPNSUaI6u8fNUA/viewform?usp=header" target="_blank">Post-Session Survey</a>
+
+            <div class="button-group flex flex-wrap justify-center gap-3 mt-4">
+                <button id="startButton" disabled>Connecting...</button>
+                <button id="sharePdfButton" class="hidden">Save PDF Map</button>
+            </div>
+        </div>
+    </div>
+
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, collection, addDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'color-sensitivity-live';
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {
+            apiKey: "AIzaSyAv4spJTRLzllMpmadLk6OQed1sYkLBK8Q",
+            authDomain: "peripheral-color-sensitivity.firebaseapp.com",
+            projectId: "peripheral-color-sensitivity",
+            storageBucket: "peripheral-color-sensitivity.firebasestorage.app",
+            messagingSenderId: "62245288024",
+            appId: "1:62245288024:web:a13807b754d444f371322d"
+        };
+
+        const { jsPDF } = window.jspdf;
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const startBtn = document.getElementById('startButton');
+        const pdfBtn = document.getElementById('sharePdfButton');
+        const centerSurveyBtn = document.getElementById('centerSurveyBtn');
+
+        let db, auth, userId, gameState = 'initializing';
+        let canvasW, canvasH, fixation;
+        let isJiggling = false, jiggleEndTime = 0;
+        let currentColorIdx = 0, currentPairIdx = 0, clicksInPair = 0;
+        let stimuli = [], userClicks = {blue: [], red: [], green: []}, actualTargets = {blue: [], red: [], green: []};
+        let presentationStartTime = 0, resultsStartTime = 0;
+        let tutorialStep = 0, canvasMessage = "Initializing Database...";
+        let resultsAnalysis = null, lastActionTime = 0;
+
+        const COLORS_DATA = [
+            { name: 'Blue', val: 'rgba(0,0,255,A)', key: 'blue', ecc: 0.90 }, 
+            { name: 'Red', val: 'rgba(255,0,0,A)', key: 'red', ecc: 0.75 },  
+            { name: 'Green', val: 'rgba(0,255,0,A)', key: 'green', ecc: 0.60 } 
+        ];
+
+        let shuffledColors = [];
+
+        const TUTORIAL = [
+            "Welcome! Keep your eyes on the central white dot. \n(Tap anywhere to continue)",
+            "Before dots appear, the center dot will VIBRATE. \nWatch for the cue!",
+            "Dots stop in your periphery. They will start dim \nand reach full saturation. Like this:",
+            "Once they vanish, tap where the dots ended. Ready?"
+        ];
+
+        async function init() {
+            try {
+                const app = initializeApp(firebaseConfig);
+                db = getFirestore(app);
+                auth = getAuth(app);
+                onAuthStateChanged(auth, async (user) => {
+                    if (user) {
+                        userId = user.uid;
+                        startBtn.disabled = false;
+                        startBtn.textContent = "Start Tutorial";
+                        gameState = 'tutorial';
+                        canvasMessage = TUTORIAL[0];
+                    } else {
+                        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) await signInWithCustomToken(auth, __initial_auth_token);
+                        else await signInAnonymously(auth);
+                    }
+                });
+            } catch (e) { canvasMessage = "Connection Error."; }
+        }
+
+        function setupCanvas() {
+            const container = document.getElementById('gameContainer');
+            canvasW = Math.min(800, container.clientWidth - 40);
+            canvasH = canvasW * 0.55;
+            canvas.width = canvasW; canvas.height = canvasH;
+            fixation = { x: canvasW / 2, y: canvasH / 2 };
+        }
+
+        function drawText(text, x, y, align = 'center', color = 'white', fontSize = '18px', bold = false) {
+            ctx.fillStyle = color;
+            ctx.font = `${bold ? 'bold ' : ''}${fontSize} Inter, sans-serif`;
+            ctx.textAlign = align;
+            ctx.shadowColor = "rgba(0,0,0,1)";
+            ctx.shadowBlur = 4;
+            const lines = text.split('\n');
+            lines.forEach((line, i) => ctx.fillText(line, x, y + (i * 24)));
+            ctx.shadowBlur = 0;
+        }
+
+        function shuffle(array) {
+            let currentIndex = array.length, randomIndex;
+            while (currentIndex != 0) {
+                randomIndex = Math.floor(Math.random() * currentIndex);
+                currentIndex--;
+                [array[currentIndex], array[randomIndex]] = [array[randomIndex], array[currentIndex]];
+            }
+            return array;
+        }
+
+        function draw() {
+            const now = performance.now();
+            ctx.fillStyle = 'black'; 
+            ctx.fillRect(0, 0, canvasW, canvasH);
+            
+            let fx = fixation.x, fy = fixation.y;
+            if (isJiggling) {
+                if (now < jiggleEndTime) {
+                    fx += (Math.random()-0.5)*12; fy += (Math.random()-0.5)*12;
+                } else { isJiggling = false; if (gameState === 'jiggling') startStimuli(); }
+            }
+            ctx.fillStyle = 'white'; ctx.beginPath(); ctx.arc(fx, fy, 5, 0, Math.PI*2); ctx.fill();
+
+            if (gameState === 'tutorial' && tutorialStep === 2) {
+                const cycle = (now % 2000) / 2000;
+                ctx.beginPath();
+                ctx.arc(fixation.x - 120, fixation.y, 10, 0, Math.PI*2);
+                ctx.fillStyle = `rgba(0, 0, 255, ${Math.abs(Math.sin(cycle * Math.PI))})`;
+                ctx.fill();
+                ctx.beginPath();
+                ctx.arc(fixation.x + 120, fixation.y, 10, 0, Math.PI*2);
+                ctx.fill();
+            }
+
+            if (gameState === 'presenting' && stimuli.length > 0) {
+                const progress = Math.min(1, (now - presentationStartTime) / 350);
+                const color = shuffledColors[currentColorIdx];
+                stimuli.forEach(s => {
+                    const curX = s.startX + (s.endX - s.startX) * progress;
+                    const curY = s.startY + (s.endY - s.startY) * progress;
+                    ctx.beginPath(); ctx.arc(curX, curY, 10, 0, Math.PI * 2);
+                    ctx.fillStyle = color.val.replace('A', progress); 
+                    ctx.fill();
+                });
+                if (progress >= 1) { 
+                    gameState = 'waiting'; 
+                    clicksInPair = 0; 
+                    canvasMessage = `Tap where the ${color.name} dots ended. (0/2)`; 
+                    lastActionTime = now; 
+                }
+            }
+
+            if (gameState === 'results') {
+                const elapsed = now - resultsStartTime;
+                
+                // Show survey button after 2 seconds
+                if (elapsed > 2000) centerSurveyBtn.style.display = 'block';
+                
+                // UPDATE: Button lock increased to 30 seconds
+                if (elapsed < 30000) {
+                    const remaining = Math.ceil((30000 - elapsed) / 1000);
+                    drawText(`Actions available in ${remaining}s...`, canvasW / 2, canvasH / 2 + 60, 'center', '#aaa', '14px');
+                } else {
+                    startBtn.classList.remove('hidden');
+                    pdfBtn.classList.remove('hidden');
+                }
+
+                if (resultsAnalysis) {
+                    drawText(`Spatial Precision: ${resultsAnalysis.accuracy}%`, canvasW / 2, 40, 'center', '#4ade80', '22px', true);
+                    drawText(resultsAnalysis.overlapHeading, canvasW / 2, 70, 'center', 'white', '16px');
+                    
+                    let xOffset = 20;
+                    COLORS_DATA.forEach(c => {
+                        const s = resultsAnalysis.colorStats[c.name];
+                        drawText(`${c.name}: ${s.bias}`, xOffset, canvasH - 20, 'left', c.key, '14px');
+                        xOffset += (canvasW - 40) / 3;
+                    });
+                }
+
+                COLORS_DATA.forEach(c => {
+                    const targets = actualTargets[c.key], clicks = userClicks[c.key];
+                    ctx.strokeStyle = c.key; ctx.lineWidth = 2;
+                    ctx.setLineDash([5, 5]); ctx.beginPath();
+                    if (targets.length > 0) {
+                        const sortedT = [...targets].sort((a,b) => Math.atan2(a.y-fixation.y, a.x-fixation.x) - Math.atan2(b.y-fixation.y, b.x-fixation.x));
+                        sortedT.forEach((p, i) => i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y));
+                        ctx.closePath();
+                    }
+                    ctx.stroke();
+                    ctx.setLineDash([]); ctx.beginPath();
+                    if (clicks.length > 0) {
+                        const sortedC = [...clicks].sort((a,b) => Math.atan2(a.y-fixation.y, a.x-fixation.x) - Math.atan2(b.y-fixation.y, b.x-fixation.x));
+                        sortedC.forEach((p, i) => i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y));
+                        ctx.closePath();
+                    }
+                    ctx.stroke();
+                });
+            }
+
+            if (gameState !== 'results' && gameState !== 'initializing' && gameState !== 'presenting') {
+                const idleTime = now - lastActionTime;
+                if (gameState === 'tutorial' || idleTime < 1500 || idleTime > 5000) {
+                    ctx.fillStyle = 'rgba(0, 0, 0, 0.4)';
+                    ctx.fillRect(0, 0, canvasW, 85);
+                    drawText(canvasMessage, canvasW / 2, 35);
+                }
+            }
+            requestAnimationFrame(draw);
+        }
+
+        function startStimuli() {
+            gameState = 'presenting';
+            presentationStartTime = performance.now();
+            lastActionTime = presentationStartTime;
+            const color = shuffledColors[currentColorIdx];
+            const baseAngles = [0, Math.PI/4, Math.PI/2, 3*Math.PI/4];
+            const baseAngle = baseAngles[currentPairIdx];
+            const pairAngles = [baseAngle, baseAngle + Math.PI];
+
+            stimuli = pairAngles.map(angle => {
+                const rBase = (canvasH/2 - 30) * color.ecc;
+                const rEnd_y = rBase * Math.sin(angle);
+                const rEnd_x = rBase * 1.5 * Math.cos(angle);
+                const absCos = Math.abs(Math.cos(angle)), absSin = Math.abs(Math.sin(angle));
+                let rStart = (canvasW / 2 / (absCos || 0.001) <= canvasH / 2 / (absSin || 0.001)) ? (canvasW / 2) / (absCos || 0.001) : (canvasH / 2) / (absSin || 0.001);
+                rStart += 60; 
+                return { startX: fixation.x + Math.cos(angle) * rStart, startY: fixation.y + Math.sin(angle) * rStart, endX: fixation.x + rEnd_x, endY: fixation.y + rEnd_y };
+            });
+            actualTargets[color.key].push(...stimuli.map(s => ({ x: s.endX, y: s.endY })));
+        }
+
+        function getResultsAnalysis() {
+            let totalError = 0, count = 0, colorStats = {};
+            COLORS_DATA.forEach(c => {
+                const targets = actualTargets[c.key], clicks = userClicks[c.key];
+                let tRadSum = 0, cRadSum = 0;
+                for(let i=0; i<targets.length; i++) {
+                    const d = Math.sqrt(Math.pow(targets[i].x - clicks[i].x, 2) + Math.pow(targets[i].y - clicks[i].y, 2));
+                    totalError += d;
+                    tRadSum += Math.sqrt(Math.pow(targets[i].x - fixation.x, 2) + Math.pow(targets[i].y - fixation.y, 2));
+                    cRadSum += Math.sqrt(Math.pow(clicks[i].x - fixation.x, 2) + Math.pow(clicks[i].y - fixation.y, 2));
+                    count++;
+                }
+                const avgT = tRadSum / targets.length, avgC = cRadSum / targets.length;
+                colorStats[c.name] = { radius: avgC, bias: avgC > avgT + 12 ? "Over" : (avgC < avgT - 12 ? "Under" : "Accurate") };
+            });
+
+            const accuracy = Math.max(0, 100 - (totalError / (count * 6))).toFixed(1);
+            const overlapThreshold = 18; 
+            let overlaps = [];
+            const bR = colorStats['Blue'].radius, rR = colorStats['Red'].radius, gR = colorStats['Green'].radius;
+            if (rR > bR || Math.abs(bR - rR) < overlapThreshold) overlaps.push("Blue/Red");
+            if (gR > rR || Math.abs(rR - gR) < overlapThreshold) overlaps.push("Red/Green");
+            if (gR > bR || Math.abs(bR - gR) < overlapThreshold) overlaps.push("Blue/Green");
+            let overlapHeading = overlaps.length >= 2 ? `Convergent Zones: ${overlaps.join(', ')}` : overlaps.length === 1 ? `Convergent Zone: ${overlaps[0]}` : "Sensitivity Zones Distinct";
+            return { accuracy, colorStats, overlapHeading };
+        }
+
+        async function saveToFirebase(analysis) {
+            const user = auth.currentUser;
+            if (!user || !db) return;
+            try { await addDoc(collection(db, "artifacts", appId, "users", user.uid, "testResults"), { userId: user.uid, timestamp: serverTimestamp(), userClicks, actualTargets, analysis, sequence: shuffledColors.map(c => c.name) }); } catch (e) {}
+        }
+
+        canvas.addEventListener('click', (e) => {
+            if (gameState === 'tutorial') {
+                if (tutorialStep < TUTORIAL.length - 1) { tutorialStep++; canvasMessage = TUTORIAL[tutorialStep]; lastActionTime = performance.now(); }
+                else startExercise();
+                return;
+            }
+            if (gameState !== 'waiting') return;
+            const r = canvas.getBoundingClientRect();
+            const color = shuffledColors[currentColorIdx];
+            userClicks[color.key].push({ x: e.clientX - r.left, y: e.clientY - r.top });
+            clicksInPair++;
+            lastActionTime = performance.now();
+            if (clicksInPair < 2) canvasMessage = `Tap where the ${color.name} dots ended. (1/2)`;
+            else {
+                currentPairIdx++;
+                if (currentPairIdx >= 4) { currentColorIdx++; currentPairIdx = 0; }
+                if (currentColorIdx >= 3) {
+                    gameState = 'results';
+                    resultsStartTime = performance.now();
+                    resultsAnalysis = getResultsAnalysis();
+                    saveToFirebase(resultsAnalysis);
+                    if (document.fullscreenElement) document.exitFullscreen();
+                } else { gameState = 'jiggling'; isJiggling = true; jiggleEndTime = performance.now() + 400; canvasMessage = ""; }
+            }
+        });
+
+        startBtn.addEventListener('click', () => {
+            if (gameState === 'tutorial') {
+                if (tutorialStep < TUTORIAL.length - 1) { tutorialStep++; canvasMessage = TUTORIAL[tutorialStep]; lastActionTime = performance.now(); }
+                else startExercise();
+            } else startExercise();
+        });
+
+        function startExercise() {
+            if (!document.fullscreenElement) document.documentElement.requestFullscreen().catch(()=>{});
+            shuffledColors = shuffle([...COLORS_DATA]);
+            currentColorIdx = 0; currentPairIdx = 0; tutorialStep = 0;
+            userClicks = {blue: [], red: [], green: []}; actualTargets = {blue: [], red: [], green: []};
+            resultsAnalysis = null;
+            centerSurveyBtn.style.display = 'none';
+            gameState = 'jiggling'; isJiggling = true; jiggleEndTime = performance.now() + 400;
+            startBtn.classList.add('hidden');
+            pdfBtn.classList.add('hidden');
+            canvasMessage = ""; 
+            setupCanvas();
+        }
+
+        pdfBtn.addEventListener('click', () => {
+            const doc = new jsPDF('l', 'mm', 'a4');
+            doc.text("Peripheral Color Sensitivity Results", 20, 20);
+            doc.addImage(canvas.toDataURL("image/png"), 'PNG', 20, 40, 250, 125);
+            doc.save("test-results.pdf");
+        });
+
+        window.onload = () => { init(); setupCanvas(); draw(); };
+        window.onresize = setupCanvas;
+        document.addEventListener('fullscreenchange', setupCanvas);
+    </script>
+</body>
+</html>
